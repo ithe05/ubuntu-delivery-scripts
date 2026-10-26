@@ -116,7 +116,18 @@ lftp -u "$FTP_USER,$FTP_PASS" -e \
 步骤 70 做两件事：
 
 1. `apt-mark hold` 当前运行内核的 `image / headers / modules / modules-extra` 以及 `linux-generic` 等元包（元包不锁，升级时会连带拉新内核）
-2. 关闭 `unattended-upgrades` 与 apt 周期自动升级——只锁内核拦不住其它包被自动升级后触发的重启
+2. 彻底关掉 apt 自动更新，四步走：
+
+```bash
+apt remove -y unattended-upgrades                              # 卸包
+systemctl disable --now apt-daily.timer apt-daily-upgrade.timer # 停 timer
+systemctl mask apt-daily.service apt-daily-upgrade.service      # mask service
+# 重写 20auto-upgrades，周期更新与无人值守升级均置 0
+```
+
+**为什么四步都要**：只 `disable` 不 `mask`，某些包的 postinst 会把 service 直接拉起来；只卸包不清 timer，`apt-daily.timer` 每天仍会跑一次 `apt update`；只 mask 不重写配置，`20auto-upgrades` 里的历史选项仍可能被其它组件读到。三层任意留一层，风险都还在。
+
+代价要说清楚：**关了自动更新，就不会再自动打安全补丁**。这类交付机在港口内网，补丁由人工窗口统一处理，所以可以接受；但如果某个项目有等保要求「必须自动更新」，把 `KERNEL_REMOVE_UNATTENDED=0`，只停用不卸载，并按项目规范登记例外。
 
 将来真要升内核，流程是：`apt-mark unhold <包名>` → 升级 → 重新验证驱动（`nvidia-smi` / `dmesg | grep -i <驱动名>`）→ 再确认可以重启。
 

@@ -83,9 +83,22 @@ lftp -u "$FTP_USER,$FTP_PASS" -e \
 | 变量 | 必填 | 默认 | 说明 |
 |---|---|---|---|
 | `KERNEL_HOLD_PACKAGES` | 否 | 空 | 留空 = 自动锁定当前运行内核的 `image/headers/modules/modules-extra` 与 `linux-generic` 等元包 |
-| `KERNEL_DISABLE_AUTO_UPGRADE` | 否 | `1` | `1` = 同时关闭 `unattended-upgrades` 与 apt 周期自动升级 |
+| `KERNEL_DISABLE_AUTO_UPGRADE` | 否 | `1` | `1` = 关闭 apt 自动更新（卸包 / 停 timer / mask service / 周期配置置 0） |
+| `KERNEL_REMOVE_UNATTENDED` | 否 | `1` | `1` = 卸载 `unattended-upgrades`；`0` = 保留安装仅停用 |
+| `APT_CONF_DIR` | 否 | `/etc/apt/apt.conf.d` | 仅测试 / 容器场景用于重定向，正常不要改 |
 
-只锁内核不够：自动升级还会升级其它包，其中一些会触发 `needrestart` 或要求重启，重启后驱动照样可能失效。所以默认两个一起关。
+关闭自动更新的完整动作（与现场脚本一致）：
+
+| # | 动作 | 命令 | 单独留下会怎样 |
+|---|---|---|---|
+| 1 | 卸载 unattended-upgrades | `apt-get -y remove unattended-upgrades` | 无人值守升级仍在，半夜自动装包 |
+| 2 | 停用定时器 | `systemctl disable --now apt-daily.timer apt-daily-upgrade.timer` | 每天仍会跑一次 `apt update`，索引变化后可能触发升级 |
+| 3 | 屏蔽服务 | `systemctl mask apt-daily.service apt-daily-upgrade.service` | 某些包 postinst 会直接 `start` 它，disable 拦不住 |
+| 4 | 重写周期配置 | 先 `rm` 再写入 `Update-Package-Lists "0"` / `Unattended-Upgrade "0"` | 旧配置项被其它组件读到，仍可能开启周期任务 |
+
+**副作用**：不会再有自动安全补丁。内网交付机由人工补丁窗口统一处理；有等保要求「必须自动更新」的项目，设 `KERNEL_REMOVE_UNATTENDED=0` 并在交付单登记例外。
+
+**幂等**：已 hold 的包跳过；包已卸载则跳过卸载；`20auto-upgrades` 内容已符合预期则不重写（`rm -f` + 重写只发生在内容不符时）。
 
 ## 软件源与依赖
 
