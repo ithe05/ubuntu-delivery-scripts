@@ -1,0 +1,14 @@
+# 真实配置文件不入库（含密码与 token）
+conf/*.env
+!conf/example.env
+
+# 运行产物
+*.log
+*.bak.*
+*.retry
+
+# 编辑器与系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
