@@ -38,6 +38,55 @@
 - 设备上已有其他类型文件系统时不自动格式化
 - 格式化前打印 `lsblk` 并要求二次确认
 
+## 交付制品（步骤 35）
+
+| 变量 | 必填 | 默认 | 说明 |
+|---|---|---|---|
+| `DEPLOY_ZIP` | 是 | — | 制品 zip 的绝对路径，一般就在数据盘根目录 |
+| `DEPLOY_DEST` | 是 | — | 解压落点，通常等于 `DATA_MOUNT` |
+| `DEPLOY_MOUNT` | 否 | `DATA_MOUNT` | 用于「是否已挂载」的强校验。未挂载直接中止 |
+| `DEPLOY_SUBDIR` | 否 | `deploy_files` | 包内顶层目录名，解压后应为 `<DEPLOY_DEST>/deploy_files` |
+| `DEPLOY_ZIP_PASS` | 否 | 空 | 留空则走 `unzip` 交互式输入，口令不进进程列表（推荐） |
+| `DEPLOY_SKIP` | 否 | `0` | `1` = 单盘机器整步跳过，`90-check.sh` 也不再校验制品 |
+| `DEPLOY_FORCE_EXTRACT` | 否 | `0` | `1` = 已解压过也强制重解 |
+| `DEPLOY_MIN_FILES` | 否 | `1` | 解压后最少文件数，低于此值视为包不完整并中止 |
+| `DEPLOY_VERIFY_PATHS` | 否 | 空 | 必须存在的关键相对路径，空格分隔，缺失即中止 |
+
+**幂等判断**：有标记文件 `.deploy_extracted` 或目标目录已非空，即视为已解压并跳过。标记文件内容是解压时间、包路径与文件数，便于事后追溯。
+
+**为什么必须校验挂载**：数据盘未挂载时，`DEPLOY_DEST` 只是根分区上的普通目录，解压会写进系统盘；之后数据盘挂上来把这个目录盖住，制品看起来「消失」，系统盘空间还少了几个 G。
+
+## FTP 增量同步（步骤 35，跟在解压后面）
+
+| 变量 | 必填 | 默认 | 说明 |
+|---|---|---|---|
+| `FTP_HOST` | 否 | 空 | 留空则整个同步步骤跳过 |
+| `FTP_USER` | 否 | `anonymous` | 账号 |
+| `FTP_PASS` | 否 | 空 | 口令。日志与 dry-run 输出中一律显示为 `****` |
+| `FTP_REMOTE_DIR` | 是（启用时） | — | 远端目录，`mirror` 的源 |
+| `FTP_LOCAL_DIR` | 否 | `DEPLOY_DEST/DEPLOY_SUBDIR` | 本地落点，必须先由解压创建 |
+| `FTP_PARALLEL` | 否 | `4` | 并发数，链路差降到 1~2 |
+| `FTP_MIN_FILES` | 否 | 空 | 同步后本地最少文件数，用于发现远端不完整 |
+
+执行的命令等价于：
+
+```bash
+lftp -u "$FTP_USER,$FTP_PASS" -e \
+  "mirror --verbose --continue --only-missing --ignore-time --parallel=$FTP_PARALLEL \
+   $FTP_REMOTE_DIR $FTP_LOCAL_DIR; bye" "ftp://$FTP_HOST"
+```
+
+`mirror` 不带 `--delete`：本地多出来的文件不会被删。这是刻意选择——现场运维有时会手工往制品目录补文件，全量镜像会把它们清掉。
+
+## 内核与驱动锁定（步骤 70）
+
+| 变量 | 必填 | 默认 | 说明 |
+|---|---|---|---|
+| `KERNEL_HOLD_PACKAGES` | 否 | 空 | 留空 = 自动锁定当前运行内核的 `image/headers/modules/modules-extra` 与 `linux-generic` 等元包 |
+| `KERNEL_DISABLE_AUTO_UPGRADE` | 否 | `1` | `1` = 同时关闭 `unattended-upgrades` 与 apt 周期自动升级 |
+
+只锁内核不够：自动升级还会升级其它包，其中一些会触发 `needrestart` 或要求重启，重启后驱动照样可能失效。所以默认两个一起关。
+
 ## 软件源与依赖
 
 | 变量 | 必填 | 默认 | 说明 |
@@ -46,7 +95,9 @@
 | `NTP_SERVERS` | 否 | 空 | 内网 NTP，多个用空格分隔 |
 | `EXTRA_PACKAGES` | 否 | 空 | 额外安装的包，空格分隔 |
 
-基础依赖固定安装：`vim curl wget net-tools lsof htop unzip zip tar tcpdump rsync tree jq chrony`
+基础依赖固定安装：`vim curl wget net-tools lsof htop unzip zip tar tcpdump rsync tree jq chrony lftp smbclient cifs-utils`
+
+其中 `unzip` 与 `lftp` 是步骤 35 的硬依赖，`smbclient`/`cifs-utils` 用于从 SMB 共享拉取缺失的装机包。
 
 ## VNC
 
@@ -90,6 +141,20 @@ DATA_DEVICE=/dev/sdb1
 DATA_MOUNT=/data
 DATA_FSTYPE=ext4
 DATA_ALLOW_FORMAT=1
+
+DEPLOY_ZIP=/data/deploy_files.zip
+DEPLOY_DEST=/data
+DEPLOY_MOUNT=/data
+DEPLOY_SUBDIR=deploy_files
+DEPLOY_MIN_FILES=1
+
+FTP_HOST=10.0.0.10
+FTP_USER=deploy
+FTP_PASS=<你的口令>
+FTP_REMOTE_DIR=/data/deploy/deploy_files
+FTP_PARALLEL=4
+
+KERNEL_DISABLE_AUTO_UPGRADE=1
 
 VNC_USER=ops
 VNC_PASSWORD=<你的密码>
