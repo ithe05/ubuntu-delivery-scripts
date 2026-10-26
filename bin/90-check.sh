@@ -23,6 +23,9 @@ _ssh_ok()     { systemctl is-active --quiet ssh || systemctl is-active --quiet s
 _disk_ok()    { local u; u="$(df --output=pcent / 2>/dev/null | tail -1 | tr -dc '0-9')"; [[ "${u:-100}" -lt 90 ]]; }
 _frpc_ok()    { systemctl is-active --quiet frpc; }
 _vnc_ok()     { ss -lnt 2>/dev/null | grep -q ":${VNC_PORT}[[:space:]]"; }
+_deploy_files(){ local d="${DEPLOY_DEST:-}/${DEPLOY_SUBDIR:-deploy_files}"; [[ -d "$d" ]] && [[ "$(find "$d" -type f 2>/dev/null | wc -l)" -ge "${DEPLOY_MIN_FILES:-1}" ]]; }
+_deploy_zip() { [[ -f "${DEPLOY_ZIP:-}" ]]; }
+_kernel_hold(){ apt-mark showhold 2>/dev/null | grep -q '^linux-'; }
 
 VNC_PORT=$((5900 + ${VNC_DISPLAY:-1}))
 
@@ -41,10 +44,21 @@ printf '\n%s存储层%s\n' "$C_BLUE" "$C_RESET"
 [[ -n "${DATA_MOUNT:-}" ]] && check_item "数据盘已挂载（${DATA_MOUNT}）"      _mount_ok
 [[ -n "${DATA_MOUNT:-}" ]] && check_item "fstab 含持久化记录（${DATA_MOUNT}）" _fstab_ok
 
+printf '\n%s交付制品%s\n' "$C_BLUE" "$C_RESET"
+if [[ "${DEPLOY_SKIP:-0}" == "1" ]]; then
+  log_info "DEPLOY_SKIP=1，按单盘机器跳过制品检查"
+else
+  check_item "制品包存在（${DEPLOY_ZIP:-未配置}）"                     _deploy_zip
+  check_item "已解压且文件数达标（${DEPLOY_SUBDIR:-deploy_files}）"    _deploy_files
+fi
+
 printf '\n%s服务层%s\n' "$C_BLUE" "$C_RESET"
 [[ -n "${NTP_SERVERS:-}" ]] && check_item "时间已同步" _ntp_ok
 [[ -n "${FRP_SERVER_ADDR:-}" ]] && check_item "frpc 运行中" _frpc_ok
 [[ -n "${VNC_USER:-}" ]] && check_item "VNC 端口监听（${VNC_PORT}）" _vnc_ok
+
+printf '\n%s内核与驱动%s\n' "$C_BLUE" "$C_RESET"
+check_item "内核已锁定（apt-mark hold）" _kernel_hold
 
 # ---------- 汇总 ----------
 printf '\n'

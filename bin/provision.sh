@@ -25,10 +25,15 @@ usage() {
   10  系统基础配置（主机名 / hosts / 时区）
   20  网络配置（netplan 静态 IP）
   30  数据盘挂载（格式化 / UUID 写入 fstab）
-  40  依赖安装与时间同步（apt 源 / 基础工具 / chrony）
+  35  交付制品（解压 deploy_files.zip + FTP 增量同步）  ← 依赖 30
+  40  依赖安装与时间同步（apt 源 / 基础工具 / unzip / lftp / chrony）
   50  VNC 远程桌面（tigervnc + systemd）
   60  frp 内网穿透（frpc 配置 + systemd）
+  70  固定内核与驱动（apt-mark hold，防驱动失效）
   90  交付自检（对照验收清单逐项检查）
+
+现场典型顺序：10,20,30 → 35 → 40 → 50,60 → 70 → 90
+（35 放在 30 之后是因为制品必须落在已挂载的数据盘上）
 
 示例:
   sudo ./bin/provision.sh -c conf/node31.env -n        # 先空跑看一遍
@@ -62,9 +67,11 @@ STEPS=(
   "10:init-system:系统基础配置"
   "20:network:网络配置"
   "30:mount-data:数据盘挂载"
+  "35:extract-deploy:交付制品解压与 FTP 同步"
   "40:install-deps:依赖安装与时间同步"
   "50:setup-vnc:VNC 远程桌面"
   "60:setup-frpc:frp 内网穿透"
+  "70:lock-kernel:固定内核与驱动"
   "90:check:交付自检"
 )
 

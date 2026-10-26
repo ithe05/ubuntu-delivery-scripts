@@ -11,7 +11,7 @@ load_conf "${CONF_FILE:?}"
 require_cmd apt-get
 step_banner 40 "依赖安装与时间同步"
 
-BASE_PACKAGES=(vim curl wget net-tools lsof htop unzip zip tar tcpdump rsync tree jq chrony)
+BASE_PACKAGES=(vim curl wget net-tools lsof htop unzip zip tar tcpdump rsync tree jq chrony lftp smbclient cifs-utils)
 
 # ---------- 软件源 ----------
 if [[ -n "${APT_MIRROR:-}" ]]; then
