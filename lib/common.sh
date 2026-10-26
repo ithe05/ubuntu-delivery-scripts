@@ -170,6 +170,11 @@ is_mounted() { mountpoint -q "$1"; }
 
 svc_active() { systemctl is-active --quiet "$1"; }
 
+# systemd 单元是否存在（用于区分「不存在」和「未启用」）
+unit_exists() {
+  systemctl list-unit-files "$1" --no-legend 2>/dev/null | grep -q "^${1}[[:space:]]"
+}
+
 # ---------- 验收检查 ----------
 CHECK_FAILED=0
 

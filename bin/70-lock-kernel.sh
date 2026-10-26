@@ -77,27 +77,64 @@ else
   log_ok "所有目标内核包均已处于锁定状态，无需变更"
 fi
 
-# ---------- 关闭自动升级（可选，默认开） ----------
+# ---------- 关闭 apt 自动更新（默认执行，与现场脚本一致） ----------
+# 只 hold 内核拦不住自动升级：apt-daily.timer 每天跑 update + unattended-upgrade，
+# 升级其它包后 needrestart 可能触发重启，一重启就暴露内核/驱动风险。
+# 所以按现场脚本做四件事：卸包 → 停 timer → mask service → 重写周期配置。
 if [[ "${KERNEL_DISABLE_AUTO_UPGRADE:-1}" == "1" ]]; then
-  if systemctl list-unit-files 2>/dev/null | grep -q '^unattended-upgrades.service'; then
-    if svc_active unattended-upgrades; then
-      log_warn "unattended-upgrades 正在运行，将停止并禁用（仅锁内核不够，它仍会升级其它包并可能重启）"
-      run systemctl disable --now unattended-upgrades || log_warn "停止 unattended-upgrades 失败，请手工确认"
-      log_ok "已禁用 unattended-upgrades"
+  # 1) 卸载 unattended-upgrades（等价于现场脚本的 apt remove -y unattended-upgrades）
+  if [[ "${KERNEL_REMOVE_UNATTENDED:-1}" == "1" ]]; then
+    if dpkg -s unattended-upgrades >/dev/null 2>&1; then
+      log_info "卸载 unattended-upgrades"
+      run env DEBIAN_FRONTEND=noninteractive apt-get -y remove unattended-upgrades \
+        || log_warn "卸载失败，稍后用 mask 方式兜底"
+      log_ok "unattended-upgrades 已卸载"
     else
-      log_info "unattended-upgrades 未运行，跳过"
+      log_info "unattended-upgrades 未安装，跳过卸载"
     fi
+  elif svc_active unattended-upgrades; then
+    run systemctl disable --now unattended-upgrades || log_warn "停用 unattended-upgrades 失败，请手工确认"
+    log_ok "已停用 unattended-upgrades（按配置保留安装）"
   else
-    log_info "本机未安装 unattended-upgrades，跳过"
+    log_info "unattended-upgrades 未运行，跳过"
   fi
 
-  AUTO_UPGRADES=/etc/apt/apt.conf.d/20auto-upgrades
-  if [[ -f "$AUTO_UPGRADES" ]] && grep -qE 'Unattended-Upgrade[[:space:]]+"1"' "$AUTO_UPGRADES"; then
-    backup_file "$AUTO_UPGRADES"
-    run_sh "sed -i -E 's/(Unattended-Upgrade[[:space:]]+)\"1\"/\\1\"0\"/' '$AUTO_UPGRADES'"
-    log_ok "已关闭 apt 周期自动升级（${AUTO_UPGRADES}）"
+  # 2) 停用 apt 每日定时器，并 mask 对应服务
+  #    单 disable 不够：有些包的 postinst 会直接把 service start 起来，mask 后连手工启动都会被拒绝
+  for unit in apt-daily.timer apt-daily-upgrade.timer; do
+    if unit_exists "$unit"; then
+      run systemctl disable --now "$unit" || log_warn "停用 ${unit} 失败"
+      log_ok "已停用 ${unit}"
+    else
+      log_info "${unit} 不存在，跳过"
+    fi
+  done
+  for unit in apt-daily.service apt-daily-upgrade.service; do
+    if unit_exists "$unit"; then
+      run systemctl mask "$unit" || log_warn "屏蔽 ${unit} 失败"
+      log_ok "已屏蔽 ${unit}"
+    else
+      log_info "${unit} 不存在，跳过"
+    fi
+  done
+
+  # 3) 重写周期配置：先删再写，顺手清掉旧文件里的其它周期项
+  #    APT_CONF_DIR 仅用于测试/容器场景重定向，默认就是系统路径
+  APT_CONF_DIR="${APT_CONF_DIR:-/etc/apt/apt.conf.d}"
+  AUTO_UPGRADES="${APT_CONF_DIR}/20auto-upgrades"
+  desired='APT::Periodic::Update-Package-Lists "0";
+APT::Periodic::Unattended-Upgrade "0";'
+  if [[ -f "$AUTO_UPGRADES" ]] && [[ "$(cat "$AUTO_UPGRADES" 2>/dev/null)" == "$desired" ]]; then
+    log_info "${AUTO_UPGRADES} 已是目标内容，无需重写"
+  elif [[ "$DRY_RUN" == "1" ]]; then
+    log_warn "[dry-run] 将重写 ${AUTO_UPGRADES}：Update-Package-Lists 0 / Unattended-Upgrade 0"
   else
-    log_info "${AUTO_UPGRADES} 未开启周期升级，无需修改"
+    backup_file "$AUTO_UPGRADES"
+    rm -f "$AUTO_UPGRADES"
+    install -d -m 755 /etc/apt/apt.conf.d
+    printf '%s\n' "$desired" >"$AUTO_UPGRADES"
+    chmod 644 "$AUTO_UPGRADES"
+    log_ok "已重写 ${AUTO_UPGRADES}（周期更新与无人值守升级均为 0）"
   fi
 fi
 
@@ -115,6 +152,37 @@ if [[ "$DRY_RUN" != "1" ]]; then
 
   log_warn "已锁定的内核不会被升级。将来要升级内核，必须先：apt-mark unhold <包名> 再升级，"
   log_warn "并在升级后重新验证显卡/采集卡驱动（nvidia-smi / dmesg | grep -i 驱动名），否则不要重启"
+
+  # ---------- APT 自动更新状态（对应现场脚本最后那段 list-timers） ----------
+  printf '\n%sAPT 自动更新状态%s\n' "$C_BLUE" "$C_RESET"
+  if [[ "${KERNEL_DISABLE_AUTO_UPGRADE:-1}" == "1" ]]; then
+    if dpkg -s unattended-upgrades >/dev/null 2>&1; then
+      log_warn "unattended-upgrades 仍处于安装状态"
+    else
+      log_ok "unattended-upgrades 未安装"
+    fi
+
+    if systemctl list-timers --all 2>/dev/null | grep -q 'apt-daily'; then
+      log_warn "仍有 apt-daily 定时器残留，请手工检查：systemctl list-timers --all | grep apt"
+    else
+      log_ok "无 apt-daily 定时器，自动更新已关闭"
+    fi
+
+    for unit in apt-daily.service apt-daily-upgrade.service; do
+      unit_exists "$unit" || continue
+      if systemctl is-enabled --quiet "$unit" 2>/dev/null; then
+        log_warn "${unit} 未被 mask"
+      else
+        log_ok "${unit} 已屏蔽"
+      fi
+    done
+
+    if grep -qs 'Unattended-Upgrade "0"' "${APT_CONF_DIR:-/etc/apt/apt.conf.d}/20auto-upgrades"; then
+      log_ok "20auto-upgrades 周期升级已置 0"
+    else
+      log_warn "20auto-upgrades 内容不符合预期，请检查"
+    fi
+  fi
 fi
 
 log_ok "步骤 70 完成"
