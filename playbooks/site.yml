@@ -1,0 +1,64 @@
+---
+# 批量交付：把工具包与配置分发到多台机器，逐台执行 provision
+# 用法：
+#   cp inventory.example.ini inventory.ini
+#   ansible-playbook site.yml --limit node31          # 先单台验证
+#   ansible-playbook site.yml                         # 再批量
+#
+# 注意：批量模式带 -y（自动确认），意味着数据盘格式化不会二次确认。
+#       conf 里 DATA_ALLOW_FORMAT 务必确认清楚再跑批量。
+
+- name: Ubuntu 服务器标准化交付
+  hosts: delivery
+  become: true
+  gather_facts: false
+
+  vars:
+    local_root: "{{ playbook_dir }}/.."
+    remote_root: /opt/ubuntu-delivery-scripts
+    conf_file: "{{ local_root }}/conf/{{ inventory_hostname }}.env"
+
+  tasks:
+    - name: 检查本机是否存在该主机的配置文件
+      ansible.builtin.stat:
+        path: "{{ conf_file }}"
+      register: conf_stat
+      delegate_to: localhost
+
+    - name: 配置文件缺失则中止
+      ansible.builtin.assert:
+        that: conf_stat.stat.exists
+        fail_msg: "缺少 {{ conf_file }}，请先创建后再执行"
+        quiet: true
+
+    - name: 分发脚本目录
+      ansible.builtin.copy:
+        src: "{{ local_root }}/{{ item }}/"
+        dest: "{{ remote_root }}/{{ item }}/"
+        mode: preserve
+      loop:
+        - bin
+        - lib
+        - docs
+
+    - name: 分发配置模板
+      ansible.builtin.copy:
+        src: "{{ local_root }}/conf/example.env"
+        dest: "{{ remote_root }}/conf/example.env"
+        mode: "0644"
+
+    - name: 分发本机配置
+      ansible.builtin.copy:
+        src: "{{ conf_file }}"
+        dest: "{{ remote_root }}/conf/{{ inventory_hostname }}.env"
+        mode: "0600"
+
+    - name: 执行交付流程
+      ansible.builtin.command:
+        cmd: "bash {{ remote_root }}/bin/provision.sh -c {{ remote_root }}/conf/{{ inventory_hostname }}.env -y"
+      register: provision_out
+      changed_when: "'交付流程结束' in provision_out.stdout"
+
+    - name: 输出执行结果
+      ansible.builtin.debug:
+        var: provision_out.stdout_lines
