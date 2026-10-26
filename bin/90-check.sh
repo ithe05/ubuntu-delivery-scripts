@@ -26,6 +26,10 @@ _vnc_ok()     { ss -lnt 2>/dev/null | grep -q ":${VNC_PORT}[[:space:]]"; }
 _deploy_files(){ local d="${DEPLOY_DEST:-}/${DEPLOY_SUBDIR:-deploy_files}"; [[ -d "$d" ]] && [[ "$(find "$d" -type f 2>/dev/null | wc -l)" -ge "${DEPLOY_MIN_FILES:-1}" ]]; }
 _deploy_zip() { [[ -f "${DEPLOY_ZIP:-}" ]]; }
 _kernel_hold(){ apt-mark showhold 2>/dev/null | grep -q '^linux-'; }
+# 自动更新已关：无 apt-daily 定时器，且 unattended-upgrades 未安装或已停用
+_apt_auto_off(){ systemctl list-timers --all 2>/dev/null | grep -q 'apt-daily' && return 1
+                 dpkg -s unattended-upgrades >/dev/null 2>&1 && systemctl is-active --quiet unattended-upgrades && return 1
+                 return 0; }
 
 VNC_PORT=$((5900 + ${VNC_DISPLAY:-1}))
 
@@ -59,6 +63,7 @@ printf '\n%s服务层%s\n' "$C_BLUE" "$C_RESET"
 
 printf '\n%s内核与驱动%s\n' "$C_BLUE" "$C_RESET"
 check_item "内核已锁定（apt-mark hold）" _kernel_hold
+check_item "APT 自动更新已关闭"          _apt_auto_off
 
 # ---------- 汇总 ----------
 printf '\n'
